@@ -1,10 +1,9 @@
-<p align="center">
+<h1>
   <a href="https://uamotors.github.io/">
-    <img src="assets/1.completo.svg" width="400" alt="UAMOTORS Logo">
+    <img src="assets/1.completo.svg" width="250" align="absmiddle" alt="UAMOTORS Logo">
   </a>
-</p>
-
-# UAMOTORS CAD Alert Monitor
+  &nbsp;UAMOTORS CAD Alert
+</h1>
 
 *English documentation below.*
 
