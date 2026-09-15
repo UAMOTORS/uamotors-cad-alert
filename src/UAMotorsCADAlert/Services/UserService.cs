@@ -53,7 +53,7 @@ public static class UserService
 
     public static UserProfile SaveLocalProfile(string email, string name)
     {
-        // Sanitizacion de caracteres especiales
+        // Sanitización de caracteres especiales.
         string cleanName = name.Trim().ToUpper().Replace("*", "").Replace("_", "").Replace("`", "").Replace("~", "");
         var profile = new UserProfile { Email = email.Trim().ToLower(), Name = cleanName };
         
@@ -97,7 +97,7 @@ public static class UserService
             string fernetToken = Encoding.UTF8.GetString(encryptedBytes);
             byte[] tokenBytes = Base64UrlDecode(fernetToken);
             
-            // Extraccion de componentes de encriptacion
+            // Extracción de componentes de encriptación.
             byte[] iv = new byte[16];
             Array.Copy(tokenBytes, 9, iv, 0, 16);
             
@@ -106,7 +106,7 @@ public static class UserService
             Array.Copy(tokenBytes, 25, ciphertext, 0, ciphertextLength);
 
             byte[] key = GetEncryptionKey(); 
-            // Division de llave para descifrado AES
+            // División de clave para descifrado AES.
             byte[] encKey = new byte[16];
             Array.Copy(key, 16, encKey, 0, 16); 
 

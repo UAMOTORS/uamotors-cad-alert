@@ -45,7 +45,7 @@ public class MonitorService
     {
         while (_isRunning)
         {
-            await Task.Delay(5000); // Frecuencia de revision
+            await Task.Delay(5000); // Frecuencia de revisión.
             
             bool isSldworksClosed = !SldworksEstaAbierto();
             List<string> pathsToCheck;
@@ -62,14 +62,14 @@ public class MonitorService
                 
                 if (isSldworksClosed || fileMissing || esBloqueoFalso)
                 {
-                    // Eliminacion de archivo residual
+                    // Eliminación de archivo residual.
                     if (!fileMissing && (isSldworksClosed || esBloqueoFalso))
                     {
                         try { File.Delete(path); } catch { }
                     }
                     else if (fileMissing)
                     {
-                        // Remocion manual de registro
+                        // Remoción manual de registro.
                         bool removed;
                         lock (_activeLockPaths)
                         {
@@ -116,7 +116,7 @@ public class MonitorService
 
         foreach (var drive in DriveInfo.GetDrives().Where(d => d.IsReady))
         {
-            // Ignoramos C: por rendimiento, asumiendo que Drive crea un disco virtual (G:, H:, etc)
+            // Se ignora la unidad C por rendimiento, asumiendo la creación de un disco virtual por Drive.
             if (drive.Name.StartsWith("C", StringComparison.OrdinalIgnoreCase)) continue;
 
             try
@@ -173,7 +173,7 @@ public class MonitorService
         if (Config.Debug) 
             return true; 
             
-        // Resolucion de ruta del archivo base
+        // Resolución de ruta del archivo base.
         string directory = Path.GetDirectoryName(filepath) ?? "";
         string lockFileName = Path.GetFileName(filepath);
         if (!lockFileName.StartsWith("~$")) return false;
@@ -181,30 +181,30 @@ public class MonitorService
         string baseFileName = lockFileName.Substring(2);
         string baseFilePath = Path.Combine(directory, baseFileName);
         
-        // Validacion de existencia
+        // Validación de existencia.
         if (!File.Exists(baseFilePath)) return false;
         
         try
         {
-            // Verificacion de bloqueo en sistema operativo
+            // Verificación de bloqueo en sistema operativo.
             using var fs = new FileStream(baseFilePath, FileMode.Open, FileAccess.Write, FileShare.None);
             
-            // Bloqueo no detectado
+            // Bloqueo no detectado.
             return false;
         }
         catch (IOException)
         {
-            // Bloqueo detectado
+            // Bloqueo detectado.
             return true;
         }
         catch (UnauthorizedAccessException)
         {
-            // Restriccion de permisos
+            // Restricción de permisos.
             return true;
         }
         catch (Exception)
         {
-            // Excepcion no controlada
+            // Excepción no controlada.
             return true;
         }
     }
@@ -219,14 +219,14 @@ public class MonitorService
         string filename = Path.GetFileName(e.FullPath);
         if (Regex.IsMatch(filename, Config.LockPattern, RegexOptions.IgnoreCase))
         {
-            // Verificacion de autenticidad del evento
+            // Verificación de autenticidad del evento.
             if (!EsBloqueoRealSw(e.FullPath))
                 return;
 
             lock (_activeLockPaths)
             {
                 if (!_activeLockPaths.Add(e.FullPath))
-                    return; // Mitigacion de eventos duplicados
+                    return; // Mitigación de eventos duplicados.
             }
             string realName = filename.Substring(2);
             DiscordService.SendMessage($"🔴 **[OCUPADO]:** Ensamble en uso (`{realName}`) por `{_userDisplay}`");

@@ -59,7 +59,7 @@ public class RegistrationForm : Form
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         this.Controls.Add(mainLayout);
 
-        // -- BANNER IMAGE --
+        // Imagen de encabezado.
         try
         {
             var assembly = Assembly.GetExecutingAssembly();
@@ -70,7 +70,7 @@ public class RegistrationForm : Form
                 {
                     Image = Image.FromStream(stream),
                     SizeMode = PictureBoxSizeMode.Zoom,
-                    Height = 110, // Incrementado para mayor visibilidad
+                    Height = 110, // Incremento de tamaño para mayor visibilidad.
                     Dock = DockStyle.Top,
                     BackColor = Color.Transparent,
                     Margin = new Padding(0, 0, 0, 15)
@@ -80,7 +80,7 @@ public class RegistrationForm : Form
         }
         catch (Exception) { }
 
-        // -- TITLES --
+        // Títulos.
         var titleBox = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -111,7 +111,7 @@ public class RegistrationForm : Form
         titleBox.Controls.Add(subtitleLabel);
         mainLayout.Controls.Add(titleBox);
 
-        // -- INPUT --
+        // Entrada.
         var inputRow = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -156,7 +156,7 @@ public class RegistrationForm : Form
         };
         mainLayout.Controls.Add(_statusLabel);
 
-        // -- BUTTON --
+        // Botón.
         _verifyButton = new Button
         {
             Text = "Verificar y activar monitoreo",
@@ -173,7 +173,7 @@ public class RegistrationForm : Form
         _verifyButton.Click += VerifyButton_Click;
         mainLayout.Controls.Add(_verifyButton);
 
-        // -- FOOTER (3 centered rows) --
+        // Pie de página.
         var footerPanel = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -224,12 +224,12 @@ public class RegistrationForm : Form
 
         mainLayout.Controls.Add(footerPanel);
 
-        // -- VERSION (Esquina inferior derecha) --
+        // Versión.
         var versionLabel = new Label
         {
             Text = GetVersion(),
             Font = new Font("Segoe UI", 9),
-            ForeColor = Color.FromArgb(148, 163, 184), // Gris
+            ForeColor = Color.FromArgb(148, 163, 184), // Color gris.
             AutoSize = true,
             Anchor = AnchorStyles.Right,
             Margin = new Padding(0, 10, 0, 0)

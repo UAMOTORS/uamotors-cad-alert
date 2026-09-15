@@ -75,14 +75,14 @@ public static class InstallerService
     {
         try
         {
-            // 1. Matar el proceso compilado de la versión anterior en Python
+            // Finaliza el proceso compilado de la versión anterior en Python.
             foreach (var p in Process.GetProcessesByName("uamotors_cad_alert"))
             {
                 p.Kill();
                 p.WaitForExit(2000);
             }
 
-            // 2. Limpiar la carpeta de inicio (Startup) de accesos directos o scripts .bat viejos
+            // Limpia la carpeta de inicio de accesos directos o scripts antiguos.
             string startupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
             foreach (var file in Directory.GetFiles(startupFolder))
             {
@@ -93,7 +93,7 @@ public static class InstallerService
                 }
             }
 
-            // 3. Limpiar el registro de Windows (por si la versión vieja se ancló ahí)
+            // Limpia el registro de Windows de anclajes anteriores.
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
             if (key != null)
             {

@@ -82,7 +82,7 @@ public static class OtaUpdateService
 
     private static bool IsNewerVersion(string current, string latest)
     {
-        // current: "v2.0", latest: "v2.1.0"
+        // Ejemplo de versiones actual y reciente.
         current = current.ToLower().Replace("v", "").Trim();
         latest = latest.ToLower().Replace("v", "").Trim();
 
@@ -91,7 +91,7 @@ public static class OtaUpdateService
             return latestVer > currentVer;
         }
         
-        // Si no es parseable (ej. faltan minor/build), comparamos los strings asumiendo que el usuario incrementa correctamente
+        // Se comparan las cadenas asumiendo un incremento correcto si el formato no es analizable.
         return string.Compare(latest, current, StringComparison.Ordinal) > 0;
     }
 
@@ -105,7 +105,7 @@ public static class OtaUpdateService
             string actualExeName = Path.GetFileName(Environment.ProcessPath ?? Assembly.GetExecutingAssembly().Location);
             string tempExePath = Path.Combine(tempDir, actualExeName);
 
-            // Descargar el archivo directamente a disco (Stream) en lugar de RAM, ideal para archivos pesados (155MB)
+            // Descarga el archivo directamente a disco mediante un flujo.
             using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
@@ -115,7 +115,7 @@ public static class OtaUpdateService
                 }
             }
 
-            // Iniciar el instalador desde la carpeta temporal
+            // Inicia el instalador desde la carpeta temporal.
             Process.Start(new ProcessStartInfo
             {
                 FileName = tempExePath,
@@ -123,7 +123,7 @@ public static class OtaUpdateService
                 UseShellExecute = true
             });
 
-            // Cerrar la instancia actual para que el nuevo .exe la sobrescriba
+            // Cierra la instancia actual para permitir la sobrescritura.
             Environment.Exit(0);
         }
         catch { }
@@ -133,13 +133,13 @@ public static class OtaUpdateService
     {
         Task.Run(async () =>
         {
-            // Darle 1 minuto a Windows para establecer la conexión a internet antes de buscar
+            // Se espera un minuto para el establecimiento de la conexión a internet antes de la búsqueda.
             await Task.Delay(TimeSpan.FromMinutes(1));
             
             while (true)
             {
                 await CheckForUpdatesAsync(onUpdateFound);
-                await Task.Delay(TimeSpan.FromHours(4)); // Revisa cada 4 horas
+                await Task.Delay(TimeSpan.FromHours(4)); // Se realiza la revisión cada 4 horas.
             }
         });
     }

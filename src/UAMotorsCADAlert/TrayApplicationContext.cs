@@ -32,7 +32,7 @@ public class TrayApplicationContext : ApplicationContext
             _trayIcon.ShowBalloonTip(3000, "Actualización Automática", msg, ToolTipIcon.Info);
         });
 
-        // Iniciar el watcher asíncrono sin bloquear el hilo principal
+        // Inicia el observador asíncrono sin bloquear el hilo principal.
         Task.Run(() => StartDriveConnectionWatcher());
     }
 
@@ -47,25 +47,24 @@ public class TrayApplicationContext : ApplicationContext
         }
         else
         {
-            // Cortar por la primera palabra
+            // Corta por la primera palabra.
             string[] parts = username.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             string firstName = parts.Length > 0 ? parts[0] : "USUARIO";
             
-            // Limitar a máximo 12 caracteres
+            // Limita a un máximo de 12 caracteres.
             if (firstName.Length > 12)
             {
                 firstName = firstName.Substring(0, 12);
             }
             
-            // Agregar "..." si el nombre original era más largo (tenía más palabras o excedía 12 caracteres)
-            // o simplemente agregarlo como solicitaste para indicar acortamiento visual.
+            // Agrega puntos suspensivos para indicar acortamiento visual.
             bool needsDots = parts.Length > 1 || username.Length > 12;
             string displayName = needsDots ? $"{firstName}..." : firstName;
 
             text = $"UAMOTORS CAD ALERT {_currentVersion}\nUSR: {displayName}\nSin conexión Drive";
         }
         
-        // Ensure text is not longer than 63 chars (Windows limit)
+        // Asegura que el texto no exceda los 63 caracteres.
         if (text.Length >= 64) text = text.Substring(0, 63);
         return text;
     }
@@ -84,7 +83,7 @@ public class TrayApplicationContext : ApplicationContext
 
                 if (!string.IsNullOrEmpty(rutaActiva))
                 {
-                    // -- DRIVE ENCONTRADO --
+                    // Unidad Drive encontrada.
                     Config.ResolvedDrivePath = rutaActiva;
 
                     if (_profile == null)
@@ -101,14 +100,14 @@ public class TrayApplicationContext : ApplicationContext
                         Services.DiscordService.SendMessage($"⚙️ Monitoreo de CAD activo para: `{_profile?.Name ?? "Usuario"}`");
                     }
 
-                    // Iniciar el Monitor
+                    // Inicia el monitor.
                     _monitorInstance = new MonitorService(rutaActiva);
                     
-                    // Actualizar UI
+                    // Actualiza la interfaz de usuario.
                     isConnected = true;
                     _trayIcon.Text = GetTrayText(true);
 
-                    // Aviso de reconexión si hubo error previo
+                    // Aviso de reconexión ante error previo.
                     if (errorShown)
                     {
                         MessageBox.Show(
@@ -117,18 +116,18 @@ public class TrayApplicationContext : ApplicationContext
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information,
                             MessageBoxDefaultButton.Button1,
-                            MessageBoxOptions.ServiceNotification // Ensures it pops up from background
+                            MessageBoxOptions.ServiceNotification // Asegura la aparición desde el fondo.
                         );
                     }
                 }
                 else
                 {
-                    // -- DRIVE NO ENCONTRADO --
+                    // Unidad Drive no encontrada.
                     elapsedSeconds += 5;
                     
                     if (elapsedSeconds >= 45 && !errorShown)
                     {
-                        // Mostrar error una sola vez después de 45 segundos
+                        // Muestra el error una sola vez después de 45 segundos.
                         errorShown = true;
                         MessageBox.Show(
                             "No se encontró la carpeta 'UAMOTORS' en tu Google Drive.\n\nPor favor revisa tu conexión a internet o asegúrate de tener Google Drive para escritorio iniciado y sincronizado.",
@@ -146,15 +145,15 @@ public class TrayApplicationContext : ApplicationContext
             }
             else
             {
-                // -- ESTAMOS CONECTADOS --
-                // Monitorear pasivamente si la carpeta desaparece (Drive se cerró / perdió internet)
-                await Task.Delay(15000); // Revisamos cada 15 seg
+                // Estado de conexión activa.
+                // Monitorea pasivamente la desaparición de la carpeta.
+                await Task.Delay(15000); // Se revisa cada 15 segundos.
                 
                 if (!Directory.Exists(Config.ResolvedDrivePath))
                 {
-                    // ¡SE PERDIÓ LA CONEXIÓN!
+                    // Pérdida de conexión.
                     isConnected = false;
-                    elapsedSeconds = 0; // Reiniciar contador para volver a avisar si no vuelve pronto
+                    elapsedSeconds = 0; // Reinicia el contador para futuros avisos.
                     errorShown = false; 
                     
                     _monitorInstance?.Stop();

@@ -1,0 +1,1302 @@
+// --- Config.cs ---
+namespace UAMotorsCADAlert;
+
+public static class Config
+{
+    public static bool Debug = false;
+
+    public const string TargetFolder = "UAMOTORS";
+    public const string BaseName = "OP-01assembly / GENERAL ASSEMBLY E";
+
+    public const string AssemblyPattern = @"^(OP-01assembly\d*|GENERAL ASSEMBLY E)\.SLDASM$";
+    public const string LockPattern = @"^~\$(OP-01assembly\d*|GENERAL ASSEMBLY E)\.SLDASM$";
+
+    public const string InstallFolderName = "UAMOTORSCADALERT";
+
+    public static readonly string RelDriveDbPath = Path.Combine("2026", "Design", "Electronics", "CAD-Alert", "authorized_users.uamotors");
+
+    public static string ResolvedDrivePath { get; set; } = string.Empty;
+
+    public static string GetAppDataDir()
+    {
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string path = Path.Combine(localAppData, InstallFolderName);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+}
+
+
+// --- Program.cs ---
+using UAMotorsCADAlert.Forms;
+using UAMotorsCADAlert.Services;
+
+namespace UAMotorsCADAlert;
+
+static class Program
+{
+    [STAThread]
+    static void Main()
+    {
+        ApplicationConfiguration.Initialize();
+        
+        InstallerService.CheckSingleInstance();
+
+        // Instala la aplicación en entorno de producción.
+        InstallerService.AutoInstalar();
+
+        var profile = UserService.LoadLocalProfile();
+        
+        // Inicia el contexto de aplicación de la bandeja del sistema.
+        var trayContext = new TrayApplicationContext(profile);
+        Application.Run(trayContext);
+    }
+}
+
+
+// --- TrayApplicationContext.cs ---
+using System.Reflection;
+using UAMotorsCADAlert.Services;
+
+namespace UAMotorsCADAlert;
+
+public class TrayApplicationContext : ApplicationContext
+{
+    private readonly NotifyIcon _trayIcon;
+
+    private MonitorService? _monitorInstance;
+    private UserProfile? _profile;
+    private string _currentVersion;
+
+    public TrayApplicationContext(UserProfile? profile)
+    {
+        _profile = profile;
+        _currentVersion = Services.OtaUpdateService.GetCurrentVersion();
+        
+        _trayIcon = new NotifyIcon()
+        {
+            Icon = LoadIcon(),
+            ContextMenuStrip = new ContextMenuStrip(),
+            Visible = true,
+            Text = GetTrayText(false)
+        };
+
+        var exitItem = new ToolStripMenuItem("Cerrar UAMOTORS CAD ALERT", null, Exit);
+        _trayIcon.ContextMenuStrip.Items.Add(exitItem);
+
+        Services.OtaUpdateService.StartBackgroundUpdateChecker(msg => 
+        {
+            _trayIcon.ShowBalloonTip(3000, "Actualización Automática", msg, ToolTipIcon.Info);
+        });
+
+        // Inicia el observador asíncrono sin bloquear el hilo principal.
+        Task.Run(() => StartDriveConnectionWatcher());
+    }
+
+    private string GetTrayText(bool isConnected)
+    {
+        string username = _profile?.Name ?? "USUARIO";
+        string text;
+        
+        if (isConnected)
+        {
+            text = $"UAMOTORS CAD ALERT ({_currentVersion})\nUSUARIO: {username}";
+        }
+        else
+        {
+            // Corta por la primera palabra.
+            string[] parts = username.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            string firstName = parts.Length > 0 ? parts[0] : "USUARIO";
+            
+            // Limita a un máximo de 12 caracteres.
+            if (firstName.Length > 12)
+            {
+                firstName = firstName.Substring(0, 12);
+            }
+            
+            // Agrega puntos suspensivos para indicar acortamiento visual.
+            bool needsDots = parts.Length > 1 || username.Length > 12;
+            string displayName = needsDots ? $"{firstName}..." : firstName;
+
+            text = $"UAMOTORS CAD ALERT {_currentVersion}\nUSR: {displayName}\nSin conexión Drive";
+        }
+        
+        // Asegura que el texto no exceda los 63 caracteres.
+        if (text.Length >= 64) text = text.Substring(0, 63);
+        return text;
+    }
+
+    private async Task StartDriveConnectionWatcher()
+    {
+        int elapsedSeconds = 0;
+        bool errorShown = false;
+        bool isConnected = false;
+
+        while (true)
+        {
+            if (!isConnected)
+            {
+                string? rutaActiva = Services.MonitorService.BuscarCarpetaUAMOTORS();
+
+                if (!string.IsNullOrEmpty(rutaActiva))
+                {
+                    // Unidad Drive encontrada.
+                    Config.ResolvedDrivePath = rutaActiva;
+
+                    if (_profile == null)
+                    {
+                        var form = new Forms.RegistrationForm(rutaActiva);
+                        form.ShowDialog();
+
+                        if (!form.IsRegistered)
+                        {
+                            Environment.Exit(0);
+                        }
+
+                        _profile = Services.UserService.LoadLocalProfile();
+                        Services.DiscordService.SendMessage($"⚙️ Monitoreo de CAD activo para: `{_profile?.Name ?? "Usuario"}`");
+                    }
+
+                    // Inicia el monitor.
+                    _monitorInstance = new MonitorService(rutaActiva);
+                    
+                    // Actualiza la interfaz de usuario.
+                    isConnected = true;
+                    _trayIcon.Text = GetTrayText(true);
+
+                    // Aviso de reconexión ante error previo.
+                    if (errorShown)
+                    {
+                        MessageBox.Show(
+                            "Se encontró la conexión con Drive, monitoreo de CAD activo.",
+                            "Reconexión Exitosa - UAMOTORS CAD ALERT",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information,
+                            MessageBoxDefaultButton.Button1,
+                            MessageBoxOptions.ServiceNotification // Asegura la aparición desde el fondo.
+                        );
+                    }
+                }
+                else
+                {
+                    // Unidad Drive no encontrada.
+                    elapsedSeconds += 5;
+                    
+                    if (elapsedSeconds >= 45 && !errorShown)
+                    {
+                        // Muestra el error una sola vez después de 45 segundos.
+                        errorShown = true;
+                        MessageBox.Show(
+                            "No se encontró la carpeta 'UAMOTORS' en tu Google Drive.\n\nPor favor revisa tu conexión a internet o asegúrate de tener Google Drive para escritorio iniciado y sincronizado.",
+                            "Sin Conexión - UAMOTORS CAD ALERT",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning,
+                            MessageBoxDefaultButton.Button1,
+                            MessageBoxOptions.ServiceNotification
+                        );
+                    }
+
+                    int delaySeconds = (elapsedSeconds >= 300) ? 15 : 5;
+                    await Task.Delay(delaySeconds * 1000);
+                }
+            }
+            else
+            {
+                // Estado de conexión activa.
+                // Monitorea pasivamente la desaparición de la carpeta.
+                await Task.Delay(15000); // Se revisa cada 15 segundos.
+                
+                if (!Directory.Exists(Config.ResolvedDrivePath))
+                {
+                    // Pérdida de conexión.
+                    isConnected = false;
+                    elapsedSeconds = 0; // Reinicia el contador para futuros avisos.
+                    errorShown = false; 
+                    
+                    _monitorInstance?.Stop();
+                    _monitorInstance = null;
+                    
+                    _trayIcon.Text = GetTrayText(false);
+                }
+            }
+        }
+    }
+
+    private Icon LoadIcon()
+    {
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using var stream = assembly.GetManifestResourceStream("UAMotorsCADAlert.Resources.cad_alert.ico");
+            if (stream != null)
+            {
+                return new Icon(stream);
+            }
+        }
+        catch { }
+        return SystemIcons.Application;
+    }
+
+    private void Exit(object? sender, EventArgs e)
+    {
+        _trayIcon.Visible = false;
+        _trayIcon.Dispose();
+        Environment.Exit(0);
+    }
+}
+
+
+// --- RegistrationForm.cs ---
+namespace UAMotorsCADAlert.Forms;
+
+using System.Reflection;
+using UAMotorsCADAlert.Services;
+
+public class RegistrationForm : Form
+{
+    private TextBox _emailInput = null!;
+    private Button _verifyButton = null!;
+    private Label _statusLabel = null!;
+    private string _rutaUAMOTORS;
+    public bool IsRegistered { get; private set; }
+
+    public RegistrationForm(string rutaUAMOTORS)
+    {
+        _rutaUAMOTORS = rutaUAMOTORS;
+        InitializeComponent();
+    }
+
+    private string GetVersion()
+    {
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using var stream = assembly.GetManifestResourceStream("UAMotorsCADAlert.version.txt");
+            if (stream != null)
+            {
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd().Trim();
+            }
+        }
+        catch { }
+        return "v2.0";
+    }
+
+    private void InitializeComponent()
+    {
+        this.Text = "UAMOTORS CAD ALERT - Registro";
+        this.FormBorderStyle = FormBorderStyle.Sizable;
+        this.MaximizeBox = true;
+        this.MinimizeBox = false;
+        this.StartPosition = FormStartPosition.CenterScreen;
+        this.BackColor = Color.FromArgb(248, 250, 252);
+        this.AutoScaleMode = AutoScaleMode.Dpi;
+
+        this.Size = new Size(750, 550);
+        this.MinimumSize = new Size(700, 500);
+        this.AutoSize = true;
+        this.AutoSizeMode = AutoSizeMode.GrowOnly;
+
+        var mainLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            Padding = new Padding(35, 25, 35, 10)
+        };
+        mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        this.Controls.Add(mainLayout);
+
+        // Imagen de encabezado.
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using var stream = assembly.GetManifestResourceStream("UAMotorsCADAlert.Resources.1.completo.png");
+            if (stream != null && stream.Length > 0)
+            {
+                var bannerBox = new PictureBox
+                {
+                    Image = Image.FromStream(stream),
+                    SizeMode = PictureBoxSizeMode.Zoom,
+                    Height = 110, // Incremento de tamaño para mayor visibilidad.
+                    Dock = DockStyle.Top,
+                    BackColor = Color.Transparent,
+                    Margin = new Padding(0, 0, 0, 15)
+                };
+                mainLayout.Controls.Add(bannerBox);
+            }
+        }
+        catch (Exception) { }
+
+        // Títulos.
+        var titleBox = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            AutoSize = true,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 0, 15)
+        };
+
+        var titleLabel = new Label
+        {
+            Text = "UAMOTORS CAD ALERT",
+            Font = new Font("Segoe UI", 18, FontStyle.Bold),
+            ForeColor = Color.FromArgb(15, 23, 42),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        titleBox.Controls.Add(titleLabel);
+
+        var subtitleLabel = new Label
+        {
+            Text = "Ingresa tu correo institucional para vincular este equipo:",
+            Font = new Font("Segoe UI", 11),
+            ForeColor = Color.FromArgb(100, 116, 139),
+            AutoSize = true,
+            Margin = new Padding(0)
+        };
+        titleBox.Controls.Add(subtitleLabel);
+        mainLayout.Controls.Add(titleBox);
+
+        // Entrada.
+        var inputRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 15, 0, 15)
+        };
+        inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
+        var emailLabel = new Label
+        {
+            Text = "Correo:",
+            Font = new Font("Segoe UI", 12, FontStyle.Bold),
+            ForeColor = Color.FromArgb(15, 23, 42),
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 0, 10, 0)
+        };
+        inputRow.Controls.Add(emailLabel, 0, 0);
+
+        _emailInput = new TextBox
+        {
+            Font = new Font("Segoe UI", 12),
+            Dock = DockStyle.Top,
+            Margin = new Padding(0)
+        };
+        inputRow.Controls.Add(_emailInput, 1, 0);
+
+        mainLayout.Controls.Add(inputRow);
+
+        _statusLabel = new Label
+        {
+            Text = "",
+            Font = new Font("Segoe UI", 10),
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            MinimumSize = new Size(0, 24),
+            Margin = new Padding(0, 0, 0, 15)
+        };
+        mainLayout.Controls.Add(_statusLabel);
+
+        // Botón.
+        _verifyButton = new Button
+        {
+            Text = "Verificar y activar monitoreo",
+            Font = new Font("Segoe UI", 11, FontStyle.Bold),
+            BackColor = Color.FromArgb(220, 38, 38),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Height = 46,
+            Dock = DockStyle.Top,
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0, 0, 0, 25)
+        };
+        _verifyButton.FlatAppearance.BorderSize = 0;
+        _verifyButton.Click += VerifyButton_Click;
+        mainLayout.Controls.Add(_verifyButton);
+
+        // Pie de página.
+        var footerPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            ColumnCount = 1,
+            RowCount = 3,
+            Margin = new Padding(0, 0, 0, 5)
+        };
+        footerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
+        var row1 = new Label
+        {
+            Text = "UAMOTORS | Departamento de Electronics",
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            ForeColor = Color.FromArgb(100, 116, 139),
+            AutoSize = true,
+            Anchor = AnchorStyles.None,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+        footerPanel.Controls.Add(row1, 0, 0);
+
+        var row2 = new Label
+        {
+            Text = "Universidad Autónoma Metropolitana",
+            Font = new Font("Segoe UI", 9),
+            ForeColor = Color.FromArgb(100, 116, 139),
+            AutoSize = true,
+            Anchor = AnchorStyles.None,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+        footerPanel.Controls.Add(row2, 0, 1);
+
+        var row3 = new LinkLabel
+        {
+            Text = "Desarrollado por Alejandro Ramírez",
+            Font = new Font("Segoe UI", 9),
+            LinkColor = Color.FromArgb(37, 99, 235),
+            ActiveLinkColor = Color.FromArgb(37, 99, 235),
+            AutoSize = true,
+            Anchor = AnchorStyles.None,
+            LinkBehavior = LinkBehavior.NeverUnderline,
+            Margin = new Padding(0)
+        };
+        row3.LinkArea = new LinkArea(17, 17);
+        row3.LinkClicked += (s, ev) => 
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/lexrammart") { UseShellExecute = true });
+        footerPanel.Controls.Add(row3, 0, 2);
+
+        mainLayout.Controls.Add(footerPanel);
+
+        // Versión.
+        var versionLabel = new Label
+        {
+            Text = GetVersion(),
+            Font = new Font("Segoe UI", 9),
+            ForeColor = Color.FromArgb(148, 163, 184), // Color gris.
+            AutoSize = true,
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(0, 10, 0, 0)
+        };
+        mainLayout.Controls.Add(versionLabel);
+
+        this.AcceptButton = _verifyButton;
+    }
+
+    private async void VerifyButton_Click(object? sender, EventArgs e)
+    {
+        string email = _emailInput.Text;
+        _statusLabel.Text = "Verificando en la base de datos de Drive...";
+        _statusLabel.ForeColor = Color.FromArgb(37, 99, 235);
+        _verifyButton.Enabled = false;
+
+        var result = await Task.Run(() => UserService.VerifyUserEmail(email, _rutaUAMOTORS));
+
+        if (result.Success)
+        {
+            UserService.SaveLocalProfile(email, result.Name!);
+            _statusLabel.Text = $"✅ ¡Bienvenidx {result.Name}! Registro completado.";
+            _statusLabel.ForeColor = Color.FromArgb(22, 163, 74);
+            IsRegistered = true;
+            await Task.Delay(3000);
+            this.Close();
+        }
+        else
+        {
+            _statusLabel.Text = result.ErrorMsg;
+            _statusLabel.ForeColor = Color.FromArgb(220, 38, 38);
+            _verifyButton.Enabled = true;
+            _emailInput.Enabled = true;
+        }
+    }
+}
+
+
+// --- DiscordService.cs ---
+using System.Text.Json;
+using System.Text;
+using System.Collections.Concurrent;
+
+namespace UAMotorsCADAlert.Services;
+
+public static class DiscordService
+{
+    private static readonly BlockingCollection<string> _messageQueue = new();
+    private static readonly HttpClient _httpClient = new();
+
+    static DiscordService()
+    {
+        Task.Factory.StartNew(WorkerLoop, TaskCreationOptions.LongRunning);
+    }
+
+    public static void SendMessage(string message)
+    {
+        _messageQueue.Add(message);
+    }
+
+    private static async Task WorkerLoop()
+    {
+        foreach (var message in _messageQueue.GetConsumingEnumerable())
+        {
+            var payload = new { content = message };
+            string json = JsonSerializer.Serialize(payload);
+
+            while (true)
+            {
+                string url = "";
+                
+                // Obtiene la URL más reciente de la base de datos en cada intento.
+                if (!string.IsNullOrEmpty(Config.ResolvedDrivePath))
+                {
+                    var db = UserService.LoadDriveDatabase(Config.ResolvedDrivePath);
+                    if (db != null && db.Config.TryGetValue("webhook_url", out var wh) && !string.IsNullOrEmpty(wh))
+                    {
+                        if (Uri.TryCreate(wh, UriKind.Absolute, out Uri? uriResult) && 
+                            (uriResult.Scheme == Uri.UriSchemeHttp || uriResult.Scheme == Uri.UriSchemeHttps))
+                        {
+                            url = wh;
+                        }
+                    }
+                }
+
+                // Se pausa y se vuelve a leer la base de datos si no hay URL configurada.
+                if (string.IsNullOrEmpty(url))
+                {
+                    await Task.Delay(10000);
+                    continue; 
+                }
+
+                // Intenta enviar.
+                try
+                {
+                    using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                    var response = await _httpClient.PostAsync(url, content);
+                    
+                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    {
+                        await Task.Delay(5000);
+                        continue;
+                    }
+                    break; // Se sale del ciclo de reintentos y se pasa al siguiente mensaje en caso de éxito.
+                }
+                catch (HttpRequestException)
+                {
+                    // Se espera 15 segundos y se reinicia el ciclo ante un fallo de red.
+                    await Task.Delay(15000); 
+                }
+                catch
+                {
+                    // Se descarta el mensaje para no bloquear la cola ante errores graves.
+                    break; 
+                }
+            }
+        }
+    }
+}
+
+
+// --- InstallerService.cs ---
+using System.Diagnostics;
+using System.Reflection;
+
+namespace UAMotorsCADAlert.Services;
+
+public static class InstallerService
+{
+    private static Mutex? _instanceMutex;
+
+    public static void CheckSingleInstance()
+    {
+        _instanceMutex = new Mutex(true, "UAMotorsCADAlert_SingleInstance_Mutex", out bool createdNew);
+        if (!createdNew)
+        {
+            Environment.Exit(0);
+        }
+    }
+
+    public static void AutoInstalar()
+    {
+        if (Config.Debug || System.Diagnostics.Debugger.IsAttached || AppDomain.CurrentDomain.BaseDirectory.Contains("bin\\Debug", StringComparison.OrdinalIgnoreCase)) 
+            return;
+
+        string actualPath = Environment.ProcessPath ?? Assembly.GetExecutingAssembly().Location;
+        string exeName = Path.GetFileName(actualPath);
+        string installFolder = Config.GetAppDataDir();
+        string targetPath = Path.Combine(installFolder, exeName);
+
+        if (!actualPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            CleanupOldPythonVersion();
+            KillPreviousInstance(exeName);
+
+            try
+            {
+                File.Copy(actualPath, targetPath, true);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al instalar: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+            }
+
+            CreateAutoStartRegistry(targetPath);
+            CreateStartMenuShortcut(targetPath, exeName);
+            
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = targetPath,
+                WorkingDirectory = installFolder
+            });
+            Environment.Exit(0);
+        }
+    }
+
+    private static void KillPreviousInstance(string exeName)
+    {
+        try
+        {
+            int currentId = Process.GetCurrentProcess().Id;
+            var processes = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exeName));
+            foreach (var p in processes)
+            {
+                if (p.Id != currentId)
+                {
+                    p.Kill();
+                    p.WaitForExit();
+                }
+            }
+        }
+        catch { }
+    }
+
+    private static void CleanupOldPythonVersion()
+    {
+        try
+        {
+            // Finaliza el proceso compilado de la versión anterior en Python.
+            foreach (var p in Process.GetProcessesByName("uamotors_cad_alert"))
+            {
+                p.Kill();
+                p.WaitForExit(2000);
+            }
+
+            // Limpia la carpeta de inicio de accesos directos o scripts antiguos.
+            string startupFolder = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+            foreach (var file in Directory.GetFiles(startupFolder))
+            {
+                string name = Path.GetFileName(file).ToLower();
+                if (name.Contains("uamotors") || name.Contains("cad_alert"))
+                {
+                    File.Delete(file);
+                }
+            }
+
+            // Limpia el registro de Windows de anclajes anteriores.
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            if (key != null)
+            {
+                if (key.GetValue("UAMotorsCADAlert") != null) key.DeleteValue("UAMotorsCADAlert", false);
+                if (key.GetValue("uamotors_cad_alert") != null) key.DeleteValue("uamotors_cad_alert", false);
+            }
+        }
+        catch { }
+    }
+
+    private static void CreateAutoStartRegistry(string targetPath)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            if (key != null)
+            {
+                key.SetValue("UAMOTORS CAD ALERT", $"\"{targetPath}\"");
+            }
+        }
+        catch { }
+    }
+
+    private static void CreateStartMenuShortcut(string targetPath, string exeName)
+    {
+        try
+        {
+            string startMenu = Environment.GetFolderPath(Environment.SpecialFolder.StartMenu);
+            string programsFolder = Path.Combine(startMenu, "Programs");
+            string shortcutPath = Path.Combine(programsFolder, Path.GetFileNameWithoutExtension(exeName) + ".lnk");
+
+            string psCmd = $"$s=(New-Object -COM WScript.Shell).CreateShortcut('{shortcutPath}');$s.TargetPath='{targetPath}';$s.Save()";
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "powershell",
+                Arguments = $"-Command \"{psCmd}\"",
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            })?.WaitForExit();
+        }
+        catch { }
+    }
+}
+
+
+// --- MonitorService.cs ---
+using System.Text.RegularExpressions;
+using System.Diagnostics;
+
+namespace UAMotorsCADAlert.Services;
+
+public class MonitorService
+{
+    private readonly FileSystemWatcher _watcher;
+    private readonly HashSet<string> _activeLockPaths = new();
+    private readonly string _userDisplay;
+    private bool _isRunning = true;
+
+    public MonitorService(string rutaActiva)
+    {
+        var profile = UserService.LoadLocalProfile();
+        _userDisplay = profile != null ? profile.Name : "Usuario Desconocido";
+
+        _watcher = new FileSystemWatcher(rutaActiva)
+        {
+            IncludeSubdirectories = true,
+            EnableRaisingEvents = true,
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Attributes
+        };
+
+        _watcher.Created += OnCreated;
+        _watcher.Changed += OnCreated;
+        _watcher.Renamed += OnRenamed;
+        _watcher.Deleted += OnDeleted;
+
+        Task.Factory.StartNew(GhostLockWatcher, TaskCreationOptions.LongRunning);
+    }
+
+    public void Stop()
+    {
+        _isRunning = false;
+        _watcher.EnableRaisingEvents = false;
+        _watcher.Dispose();
+        lock (_activeLockPaths)
+        {
+            _activeLockPaths.Clear();
+        }
+    }
+
+    private async Task GhostLockWatcher()
+    {
+        while (_isRunning)
+        {
+            await Task.Delay(5000); // Frecuencia de revisión.
+            
+            bool isSldworksClosed = !SldworksEstaAbierto();
+            List<string> pathsToCheck;
+            
+            lock (_activeLockPaths)
+            {
+                pathsToCheck = _activeLockPaths.ToList();
+            }
+
+            foreach (var path in pathsToCheck)
+            {
+                bool fileMissing = !File.Exists(path);
+                bool esBloqueoFalso = !fileMissing && !EsBloqueoRealSw(path);
+                
+                if (isSldworksClosed || fileMissing || esBloqueoFalso)
+                {
+                    // Eliminación de archivo residual.
+                    if (!fileMissing && (isSldworksClosed || esBloqueoFalso))
+                    {
+                        try { File.Delete(path); } catch { }
+                    }
+                    else if (fileMissing)
+                    {
+                        // Remoción manual de registro.
+                        bool removed;
+                        lock (_activeLockPaths)
+                        {
+                            removed = _activeLockPaths.Remove(path);
+                        }
+                        
+                        if (removed)
+                        {
+                            string filename = Path.GetFileName(path);
+                            string realName = filename.Length >= 2 ? filename.Substring(2) : filename;
+                            DiscordService.SendMessage($"🟢 **[LIBRE]:** Ensamble disponible (`{realName}`) - Liberado por `{_userDisplay}`");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public static bool SldworksEstaAbierto()
+    {
+        try
+        {
+            return Process.GetProcessesByName("SLDWORKS").Length > 0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    public static string? BuscarCarpetaUAMOTORS()
+    {
+        string target = Config.TargetFolder;
+        
+        string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] driveNames = { "Google Drive", "Drive", "GoogleDrive" };
+
+        foreach (var name in driveNames)
+        {
+            string path = Path.Combine(userHome, name, target);
+            if (Directory.Exists(path) && VerificarEnsamble(path))
+                return path;
+        }
+
+        foreach (var drive in DriveInfo.GetDrives().Where(d => d.IsReady))
+        {
+            // Se ignora la unidad C por rendimiento, asumiendo la creación de un disco virtual por Drive.
+            if (drive.Name.StartsWith("C", StringComparison.OrdinalIgnoreCase)) continue;
+
+            try
+            {
+                string? candidate = FindFolderDeep(drive.RootDirectory, target, 0, 2);
+                if (candidate != null) return candidate;
+            }
+            catch (Exception) { }
+        }
+
+        return null;
+    }
+
+    private static string? FindFolderDeep(DirectoryInfo dir, string target, int currentDepth, int maxDepth)
+    {
+        if (currentDepth > maxDepth) return null;
+
+        try
+        {
+            foreach (var d in dir.GetDirectories())
+            {
+                if (d.Name.Equals(target, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (VerificarEnsamble(d.FullName)) return d.FullName;
+                }
+            }
+
+            foreach (var d in dir.GetDirectories())
+            {
+                string? found = FindFolderDeep(d, target, currentDepth + 1, maxDepth);
+                if (found != null) return found;
+            }
+        }
+        catch (Exception) { }
+        return null;
+    }
+
+    private static bool VerificarEnsamble(string ruta)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(ruta, "*", SearchOption.AllDirectories))
+            {
+                if (Regex.IsMatch(Path.GetFileName(file), Config.AssemblyPattern, RegexOptions.IgnoreCase))
+                    return true;
+            }
+        }
+        catch (Exception) { }
+        return false;
+    }
+
+    private static bool EsBloqueoRealSw(string filepath)
+    {
+        if (Config.Debug) 
+            return true; 
+            
+        // Resolución de ruta del archivo base.
+        string directory = Path.GetDirectoryName(filepath) ?? "";
+        string lockFileName = Path.GetFileName(filepath);
+        if (!lockFileName.StartsWith("~$")) return false;
+        
+        string baseFileName = lockFileName.Substring(2);
+        string baseFilePath = Path.Combine(directory, baseFileName);
+        
+        // Validación de existencia.
+        if (!File.Exists(baseFilePath)) return false;
+        
+        try
+        {
+            // Verificación de bloqueo en sistema operativo.
+            using var fs = new FileStream(baseFilePath, FileMode.Open, FileAccess.Write, FileShare.None);
+            
+            // Bloqueo no detectado.
+            return false;
+        }
+        catch (IOException)
+        {
+            // Bloqueo detectado.
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Restricción de permisos.
+            return true;
+        }
+        catch (Exception)
+        {
+            // Excepción no controlada.
+            return true;
+        }
+    }
+
+    private void OnRenamed(object sender, RenamedEventArgs e)
+    {
+        OnCreated(sender, e);
+    }
+
+    private void OnCreated(object sender, FileSystemEventArgs e)
+    {
+        string filename = Path.GetFileName(e.FullPath);
+        if (Regex.IsMatch(filename, Config.LockPattern, RegexOptions.IgnoreCase))
+        {
+            // Verificación de autenticidad del evento.
+            if (!EsBloqueoRealSw(e.FullPath))
+                return;
+
+            lock (_activeLockPaths)
+            {
+                if (!_activeLockPaths.Add(e.FullPath))
+                    return; // Mitigación de eventos duplicados.
+            }
+            string realName = filename.Substring(2);
+            DiscordService.SendMessage($"🔴 **[OCUPADO]:** Ensamble en uso (`{realName}`) por `{_userDisplay}`");
+        }
+    }
+
+    private void OnDeleted(object sender, FileSystemEventArgs e)
+    {
+        string filename = Path.GetFileName(e.FullPath);
+        if (Regex.IsMatch(filename, Config.LockPattern, RegexOptions.IgnoreCase))
+        {
+            bool removed;
+            lock (_activeLockPaths)
+            {
+                removed = _activeLockPaths.Remove(e.FullPath);
+            }
+
+            if (removed)
+            {
+                string realName = filename.Substring(2);
+                DiscordService.SendMessage($"🟢 **[LIBRE]:** Ensamble disponible (`{realName}`) - Liberado por `{_userDisplay}`");
+            }
+        }
+    }
+}
+
+
+// --- OtaUpdateService.cs ---
+using System.Diagnostics;
+using System.Reflection;
+using System.Text.Json;
+
+namespace UAMotorsCADAlert.Services;
+
+public static class OtaUpdateService
+{
+    private const string RepoUrl = "https://api.github.com/repos/lexrammart/uamotors-cad-alert/releases/latest";
+    private static readonly HttpClient _httpClient;
+
+    static OtaUpdateService()
+    {
+        _httpClient = new HttpClient();
+        _httpClient.DefaultRequestHeaders.Add("User-Agent", "UAMotorsCADAlert-Updater");
+        _httpClient.Timeout = TimeSpan.FromMinutes(30); // Prevenir el límite de 100s en descargas pesadas
+    }
+
+    public static string GetCurrentVersion()
+    {
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using var stream = assembly.GetManifestResourceStream("UAMotorsCADAlert.version.txt");
+            if (stream != null)
+            {
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd().Trim();
+            }
+        }
+        catch { }
+        return "v2.0"; // fallback
+    }
+
+    public static async Task CheckForUpdatesAsync(Action<string>? onUpdateFound = null)
+    {
+        // En entorno de desarrollo (Rider) no intentamos actualizar para evitar crasheos
+        if (Config.Debug || Debugger.IsAttached || AppDomain.CurrentDomain.BaseDirectory.Contains("bin\\Debug", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            var response = await _httpClient.GetAsync(RepoUrl);
+            if (!response.IsSuccessStatusCode) return;
+
+            string json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("tag_name", out var tagElement))
+            {
+                string latestVersion = tagElement.GetString() ?? "";
+                string currentVersion = GetCurrentVersion();
+
+                if (IsNewerVersion(currentVersion, latestVersion))
+                {
+                    // Buscar el asset .exe
+                    if (root.TryGetProperty("assets", out var assets) && assets.GetArrayLength() > 0)
+                    {
+                        foreach (var asset in assets.EnumerateArray())
+                        {
+                            if (asset.TryGetProperty("name", out var nameElement) && 
+                                nameElement.GetString()?.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) == true)
+                            {
+                                if (asset.TryGetProperty("browser_download_url", out var downloadUrlElement))
+                                {
+                                    string downloadUrl = downloadUrlElement.GetString() ?? "";
+                                    onUpdateFound?.Invoke($"Descargando actualización a {latestVersion}...");
+                                    await DownloadAndApplyUpdate(downloadUrl);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+
+    private static bool IsNewerVersion(string current, string latest)
+    {
+        // Ejemplo de versiones actual y reciente.
+        current = current.ToLower().Replace("v", "").Trim();
+        latest = latest.ToLower().Replace("v", "").Trim();
+
+        if (Version.TryParse(current, out var currentVer) && Version.TryParse(latest, out var latestVer))
+        {
+            return latestVer > currentVer;
+        }
+        
+        // Se comparan las cadenas asumiendo un incremento correcto si el formato no es analizable.
+        return string.Compare(latest, current, StringComparison.Ordinal) > 0;
+    }
+
+    private static async Task DownloadAndApplyUpdate(string downloadUrl)
+    {
+        try
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "UAMotorsUpdate");
+            Directory.CreateDirectory(tempDir);
+            
+            string actualExeName = Path.GetFileName(Environment.ProcessPath ?? Assembly.GetExecutingAssembly().Location);
+            string tempExePath = Path.Combine(tempDir, actualExeName);
+
+            // Descarga el archivo directamente a disco mediante un flujo.
+            using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+            {
+                response.EnsureSuccessStatusCode();
+                using (var fs = new FileStream(tempExePath, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    await response.Content.CopyToAsync(fs);
+                }
+            }
+
+            // Inicia el instalador desde la carpeta temporal.
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = tempExePath,
+                WorkingDirectory = tempDir,
+                UseShellExecute = true
+            });
+
+            // Cierra la instancia actual para permitir la sobrescritura.
+            Environment.Exit(0);
+        }
+        catch { }
+    }
+
+    public static void StartBackgroundUpdateChecker(Action<string>? onUpdateFound)
+    {
+        Task.Run(async () =>
+        {
+            // Se espera un minuto para el establecimiento de la conexión a internet antes de la búsqueda.
+            await Task.Delay(TimeSpan.FromMinutes(1));
+            
+            while (true)
+            {
+                await CheckForUpdatesAsync(onUpdateFound);
+                await Task.Delay(TimeSpan.FromHours(4)); // Se realiza la revisión cada 4 horas.
+            }
+        });
+    }
+}
+
+
+// --- UserService.cs ---
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text;
+
+namespace UAMotorsCADAlert.Services;
+
+public class UserProfile
+{
+    [JsonPropertyName("email")]
+    public string Email { get; set; } = string.Empty;
+    
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+}
+
+public class WhitelistEntry
+{
+    [JsonPropertyName("nombre")]
+    public string Nombre { get; set; } = string.Empty;
+}
+
+public class DriveDatabase
+{
+    [JsonPropertyName("config")]
+    public Dictionary<string, string> Config { get; set; } = new();
+
+    [JsonPropertyName("users")]
+    public Dictionary<string, WhitelistEntry> Users { get; set; } = new();
+}
+
+public static class UserService
+{
+    public static string GetProfileFilePath() => Path.Combine(Config.GetAppDataDir(), "user_profile.uamotors");
+
+    public static UserProfile? LoadLocalProfile()
+    {
+        string path = GetProfileFilePath();
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            byte[] encryptedData = File.ReadAllBytes(path);
+            byte[] decryptedData = ProtectedData.Unprotect(encryptedData, null, DataProtectionScope.CurrentUser);
+            string json = Encoding.UTF8.GetString(decryptedData);
+            return JsonSerializer.Deserialize<UserProfile>(json);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static UserProfile SaveLocalProfile(string email, string name)
+    {
+        // Sanitización de caracteres especiales.
+        string cleanName = name.Trim().ToUpper().Replace("*", "").Replace("_", "").Replace("`", "").Replace("~", "");
+        var profile = new UserProfile { Email = email.Trim().ToLower(), Name = cleanName };
+        
+        string jsonStr = JsonSerializer.Serialize(profile);
+        byte[] dataToEncrypt = Encoding.UTF8.GetBytes(jsonStr);
+        byte[] encryptedData = ProtectedData.Protect(dataToEncrypt, null, DataProtectionScope.CurrentUser);
+        
+        File.WriteAllBytes(GetProfileFilePath(), encryptedData);
+        return profile;
+    }
+
+    private static byte[] GetEncryptionKey()
+    {
+        string secret = "UAMOTORS_2026_CAD_ELECTRONICS";
+        string saltStr = "UAMOTORS_CAD_ALERT_SALT";
+        byte[] salt = Encoding.UTF8.GetBytes(saltStr);
+        
+        using var pbkdf2 = new Rfc2898DeriveBytes(secret, salt, 100000, HashAlgorithmName.SHA256);
+        return pbkdf2.GetBytes(32);
+    }
+
+    private static byte[] Base64UrlDecode(string input)
+    {
+        string base64 = input.Replace('-', '+').Replace('_', '/');
+        switch (base64.Length % 4)
+        {
+            case 2: base64 += "=="; break;
+            case 3: base64 += "="; break;
+        }
+        return Convert.FromBase64String(base64);
+    }
+
+    public static DriveDatabase? LoadDriveDatabase(string rutaUAMOTORS)
+    {
+        string dbPath = Path.Combine(rutaUAMOTORS, Config.RelDriveDbPath);
+        if (!File.Exists(dbPath)) return null;
+
+        try
+        {
+            byte[] encryptedBytes = File.ReadAllBytes(dbPath);
+            string fernetToken = Encoding.UTF8.GetString(encryptedBytes);
+            byte[] tokenBytes = Base64UrlDecode(fernetToken);
+            
+            // Extracción de componentes de encriptación.
+            byte[] iv = new byte[16];
+            Array.Copy(tokenBytes, 9, iv, 0, 16);
+            
+            int ciphertextLength = tokenBytes.Length - 9 - 16 - 32;
+            byte[] ciphertext = new byte[ciphertextLength];
+            Array.Copy(tokenBytes, 25, ciphertext, 0, ciphertextLength);
+
+            byte[] key = GetEncryptionKey(); 
+            // División de clave para descifrado AES.
+            byte[] encKey = new byte[16];
+            Array.Copy(key, 16, encKey, 0, 16); 
+
+            using var aes = Aes.Create();
+            aes.Key = encKey;
+            aes.IV = iv;
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.PKCS7;
+
+            using var decryptor = aes.CreateDecryptor();
+            byte[] decryptedBytes = decryptor.TransformFinalBlock(ciphertext, 0, ciphertext.Length);
+            string json = Encoding.UTF8.GetString(decryptedBytes);
+            
+            return JsonSerializer.Deserialize<DriveDatabase>(json);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static (bool Success, string? Name, string ErrorMsg) VerifyUserEmail(string email, string rutaUAMOTORS)
+    {
+        string emailClean = email.Trim().ToLower();
+        if (string.IsNullOrEmpty(emailClean) || !emailClean.Contains("@"))
+            return (false, null, "Por favor ingresa un correo electrónico válido.");
+
+        var db = LoadDriveDatabase(rutaUAMOTORS);
+        if (db == null)
+            return (false, null, $"No se encontró la Base de Datos en Drive. Asegúrate de tener Drive abierto.");
+
+        if (db.Users.TryGetValue(emailClean, out var userEntry))
+        {
+            string name = !string.IsNullOrEmpty(userEntry.Nombre) ? userEntry.Nombre : "Usuario Autorizado";
+            return (true, name, string.Empty);
+        }
+
+        return (false, null, "Correo no encontrado. Contacta al administrador si crees que es un error.");
+    }
+}
+
+

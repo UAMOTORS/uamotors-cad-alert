@@ -30,7 +30,7 @@ public static class DiscordService
             {
                 string url = "";
                 
-                // 1. Obtener la URL más reciente de la DB cada vez que intentamos (o reintentamos)
+                // Obtiene la URL más reciente de la base de datos en cada intento.
                 if (!string.IsNullOrEmpty(Config.ResolvedDrivePath))
                 {
                     var db = UserService.LoadDriveDatabase(Config.ResolvedDrivePath);
@@ -44,14 +44,14 @@ public static class DiscordService
                     }
                 }
 
-                // 2. Si no hay URL configurada, pausamos y volvemos a leer la DB después
+                // Se pausa y se vuelve a leer la base de datos si no hay URL configurada.
                 if (string.IsNullOrEmpty(url))
                 {
                     await Task.Delay(10000);
                     continue; 
                 }
 
-                // 3. Intentar enviar
+                // Intenta enviar.
                 try
                 {
                     using var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -62,16 +62,16 @@ public static class DiscordService
                         await Task.Delay(5000);
                         continue;
                     }
-                    break; // Exito, salimos del ciclo de reintentos y pasamos al siguiente mensaje
+                    break; // Se sale del ciclo de reintentos y se pasa al siguiente mensaje en caso de éxito.
                 }
                 catch (HttpRequestException)
                 {
-                    // Fallo de red, esperamos 15s y volvemos a empezar el ciclo (lo cual volverá a leer la DB)
+                    // Se espera 15 segundos y se reinicia el ciclo ante un fallo de red.
                     await Task.Delay(15000); 
                 }
                 catch
                 {
-                    // Otros errores graves (ej. URL rota no detectada), descartamos el mensaje para no trabar la cola
+                    // Se descarta el mensaje para no bloquear la cola ante errores graves.
                     break; 
                 }
             }

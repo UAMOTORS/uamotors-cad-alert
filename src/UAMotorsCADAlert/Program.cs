@@ -12,12 +12,12 @@ static class Program
         
         InstallerService.CheckSingleInstance();
 
-        // Instalacion de la aplicacion en entorno de produccion
+        // Instala la aplicación en entorno de producción.
         InstallerService.AutoInstalar();
 
         var profile = UserService.LoadLocalProfile();
         
-        // Iniciar el contexto de aplicación del System Tray (icono junto al reloj)
+        // Inicia el contexto de aplicación de la bandeja del sistema.
         var trayContext = new TrayApplicationContext(profile);
         Application.Run(trayContext);
     }
